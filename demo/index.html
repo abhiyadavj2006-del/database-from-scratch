@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>minidb — a database from scratch</title>
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.55;
+         max-width: 760px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.9rem; margin-bottom: .2rem; }
+  h2 { margin-top: 2rem; border-bottom: 1px solid #ddd; padding-bottom: .3rem; }
+  code { background: #f2f2f2; padding: .1em .35em; border-radius: 4px; font-size: .92em; }
+  pre { background: #111; color: #e8e8e8; padding: 1rem; border-radius: 8px;
+        overflow-x: auto; font-size: .88rem; line-height: 1.45; }
+  pre .dim { color: #999; }
+  .note { background: #fff8e1; border-left: 4px solid #f0b429; padding: .8rem 1rem; }
+  .box { border: 1px solid #ddd; border-radius: 8px; padding: 1rem 1.2rem; margin: 1rem 0; }
+  table { border-collapse: collapse; }
+  td, th { border: 1px solid #ccc; padding: .35rem .7rem; text-align: left; }
+  footer { color: #666; font-size: .9rem; margin-top: 2.5rem; }
+</style>
+</head>
+<body>
+
+<h1>minidb — a database from scratch</h1>
+<p>A minimal but <strong>real</strong> persistent database, written in Python with
+only the standard library. No server, no dependencies, no accounts, no paid services.</p>
+
+<p>It is <strong>not</strong> a hosted database. This page is a static demo of what the
+code does — the database itself runs on your own machine from the terminal.
+See <a href="#run">How to run it</a> below.</p>
+
+<h2>What it does</h2>
+<ul>
+  <li><strong>Tables</strong> — <code>CREATE TABLE users (id INT, name TEXT, age INT);</code></li>
+  <li><strong>INSERT / SELECT</strong> — with <code>WHERE</code> filters (<code>=</code>, <code>!=</code>, <code>&lt;</code>, <code>&gt;</code>, <code>&lt;=</code>, <code>&gt;=</code>, <code>AND</code>), plus <code>UPDATE</code> and <code>DELETE</code>.</li>
+  <li><strong>A real B-tree index</strong> — <code>CREATE INDEX</code> builds a B-tree (minimum degree 3) over a column. Equality and range lookups use it; other queries fall back to a full scan. <code>EXPLAIN</code> shows which plan was chosen.</li>
+  <li><strong>Persistence to disk</strong> — a database is a directory (<code>demo.db/</code>) holding <code>meta.json</code> and one <code>&lt;table&gt;.json</code> file per table. Writes are atomic (write to <code>.tmp</code>, then rename), so closing and reopening the database keeps your rows. Indexes are rebuilt from the table files on open.</li>
+  <li><strong>A CLI / REPL</strong> — <code>cli.py</code>, with <code>.help</code>, <code>.tables</code>, <code>.exit</code>, script mode (<code>--file demo.sql</code>) and piped input.</li>
+</ul>
+
+<h2>Try it — example session</h2>
+<p>This is the real output of running the included demo script
+(<code>python3 cli.py demo.db --file demo.sql</code>), captured 2026-11-21:</p>
+
+<pre><span class="dim">minidb&gt; CREATE TABLE users (id INT, name TEXT, age INT);</span>
+Table users created.
+<span class="dim">minidb&gt; INSERT INTO users VALUES (1, 'Alice', 30);</span>
+1 row inserted into users (row id 0).
+<span class="dim">minidb&gt; INSERT INTO users VALUES (2, 'Bob', 25);</span>
+1 row inserted into users (row id 1).
+<span class="dim">minidb&gt; INSERT INTO users VALUES (3, 'Carol', 35);</span>
+1 row inserted into users (row id 2).
+<span class="dim">minidb&gt; INSERT INTO users VALUES (4, 'Dave', 28);</span>
+1 row inserted into users (row id 3).
+<span class="dim">minidb&gt; CREATE INDEX idx_users_age ON users (age);</span>
+Index idx_users_age created on users(age). B-tree height=1, entries=4.</pre>
+
+<pre><span class="dim">minidb&gt; SELECT * FROM users;</span>
+id | name  | age
+---+-------+----
+1  | Alice | 30
+2  | Bob   | 25
+3  | Carol | 35
+4  | Dave  | 28
+4 row(s). Plan: FULL TABLE SCAN (4 row(s) examined)
+
+<span class="dim">minidb&gt; SELECT name, age FROM users WHERE age &gt; 28;</span>
+name  | age
+------+----
+Alice | 30
+Carol | 35
+2 row(s). Plan: INDEX RANGE SCAN on users(age) using B-tree
+(height=1) — 2 row id(s) via index, in key order
+
+<span class="dim">minidb&gt; SELECT * FROM users WHERE age = 30;</span>
+id | name  | age
+---+-------+----
+1  | Alice | 30
+1 row(s). Plan: INDEX SCAN on users(age) using B-tree
+(height=1) — 1 row id(s) via index, no full scan
+
+<span class="dim">minidb&gt; EXPLAIN SELECT * FROM users WHERE name = 'Bob';</span>
+EXPLAIN: FULL TABLE SCAN (4 row(s) examined) — no usable index
+for this predicate (indexes on this table: ['age']).</pre>
+
+<p><strong>Persistence check:</strong> in a brand-new process afterwards,
+<code>SELECT * FROM users;</code> still returned all 4 rows, and
+<code>WHERE age = 30</code> still used the rebuilt index
+(<code>INDEX SCAN … 1 row id(s) via index</code>). The data lives in
+<code>demo.db/meta.json</code> and <code>demo.db/users.json</code> on disk.</p>
+
+<h2>How the B-tree index works</h2>
+<div class="box">
+<p>Each indexed column gets its own B-tree. Keys are the column values (sorted
+inside every node); each key maps to a <em>bucket</em> of row ids, so duplicate
+values (e.g. two users aged 30) share one key. Every leaf is at the same depth,
+so the tree stays balanced and search / insert cost <code>O(log n)</code>.</p>
+<p>With minimum degree <code>t = 3</code>, a node holds at most 5 keys and 6 children.
+The height bound is <code>log<sub>t</sub>((n+1)/2) + 1</code> — for 200 rows that is
+about 5, and the test suite verifies a 200-row tree has height 5 and that every
+key is still findable. Sequential inserts leave nodes at minimum occupancy
+(2 keys), so the height is at the bound rather than below it; a larger
+<code>t</code> would be the next tuning step for disk-sized pages.</p>
+<p>When a node fills up it <em>splits</em>: the median key moves up to the parent,
+the node becomes two half-full nodes, and if the root splits the tree grows one
+level taller. That is the whole trick — splits, not rebalancing passes, keep
+the tree balanced.</p>
+</div>
+
+<h2 id="run">How to run it</h2>
+<p>Requirements: Python 3.10+ only. No packages to install, no environment
+variables, no network.</p>
+<pre>git clone &lt;your-repo-url&gt; database-from-scratch
+cd database-from-scratch
+python3 test_db.py            <span class="dim"># 31 automated checks</span>
+python3 cli.py demo.db --file demo.sql   <span class="dim"># run the demo</span>
+python3 cli.py demo.db        <span class="dim"># interactive REPL; try:</span>
+<span class="dim">#   SELECT * FROM users WHERE age = 30;</span>
+<span class="dim">#   EXPLAIN SELECT * FROM users WHERE age = 30;</span></pre>
+
+<h2>What it does not do (yet)</h2>
+<ul>
+  <li>No JOINs, no <code>ORDER BY</code> / <code>LIMIT</code> / <code>GROUP BY</code>, no <code>NULL</code>s, no primary-key / uniqueness enforcement.</li>
+  <li>No transactions, WAL, or crash recovery beyond atomic file replacement; no concurrency control (single process, single writer).</li>
+  <li>No persistence of the index itself — it is rebuilt on open (fast for small tables, a cost at scale).</li>
+  <li>Whole-table JSON files are rewritten on every write, so it is not suited to large tables. A page-based storage file is the natural next step.</li>
+</ul>
+
+<div class="note"><strong>Live?</strong> There is no hosted database to visit — this page
+<em>is</em> the live part. It is plain static HTML with no JavaScript and no
+external assets, so it can be served from GitHub Pages or any static host.
+The database itself is downloaded and run locally. See “Live / Deploy” in
+the <code>README.md</code> for the exact steps.</div>
+
+<footer>
+  minidb · database-from-scratch · MIT License · Python standard library only ·
+  Full source, tests and README in the repo root.
+</footer>
+
+</body>
+</html>
