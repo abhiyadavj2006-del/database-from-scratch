@@ -24,7 +24,13 @@
 
 <h1>minidb — a database from scratch</h1>
 <p>A minimal but <strong>real</strong> persistent database, written in Python with
-only the standard library. No server, no dependencies, no accounts, no paid services.</p>
+only the standard library. No server framework, no dependencies, no accounts,
+no paid services. It follows the architecture of
+<a href="https://www.youtube.com/watch?v=5Pc18ge9ohI">“Writing My Own Database
+From Scratch”</a> by Antonio Sarosi (source:
+<a href="https://github.com/antoniosarosi/mkdb">antoniosarosi/mkdb</a>): one
+file of 4&nbsp;KiB pages, B-trees on slotted pages, a clock page cache, journal
+transactions, and a TCP server.</p>
 
 <p>It is <strong>not</strong> a hosted database. This page is a static demo of what the
 code does — the database itself runs on your own machine from the terminal.
@@ -32,37 +38,39 @@ See <a href="#run">How to run it</a> below.</p>
 
 <h2>What it does</h2>
 <ul>
-  <li><strong>Tables</strong> — <code>CREATE TABLE users (id INT, name TEXT, age INT);</code></li>
-  <li><strong>INSERT / SELECT</strong> — with <code>WHERE</code> filters (<code>=</code>, <code>!=</code>, <code>&lt;</code>, <code>&gt;</code>, <code>&lt;=</code>, <code>&gt;=</code>, <code>AND</code>), plus <code>UPDATE</code> and <code>DELETE</code>.</li>
-  <li><strong>A real B-tree index</strong> — <code>CREATE INDEX</code> builds a B-tree (minimum degree 3) over a column. Equality and range lookups use it; other queries fall back to a full scan. <code>EXPLAIN</code> shows which plan was chosen.</li>
-  <li><strong>Persistence to disk</strong> — a database is a directory (<code>demo.db/</code>) holding <code>meta.json</code> and one <code>&lt;table&gt;.json</code> file per table. Writes are atomic (write to <code>.tmp</code>, then rename), so closing and reopening the database keeps your rows. Indexes are rebuilt from the table files on open.</li>
-  <li><strong>A CLI / REPL</strong> — <code>cli.py</code>, with <code>.help</code>, <code>.tables</code>, <code>.exit</code>, script mode (<code>--file demo.sql</code>) and piped input.</li>
+  <li><strong>Tables</strong> — <code>CREATE TABLE users (id INT PRIMARY KEY, name TEXT NOT NULL, age INT, email TEXT UNIQUE);</code></li>
+  <li><strong>INSERT / SELECT / UPDATE / DELETE</strong> — with <code>WHERE</code> filters (<code>=</code>, <code>!=</code>, <code>&lt;</code>, <code>&gt;</code>, <code>&lt;=</code>, <code>&gt;=</code>, <code>AND</code>, <code>OR</code>, <code>IS NULL</code>), multi-row <code>INSERT</code>, and <code>ORDER BY … LIMIT … OFFSET …</code> (big sorts spill to temp files and merge K-way, like the video's external merge sort).</li>
+  <li><strong>Constraints</strong> — <code>PRIMARY KEY</code> (the table itself is a B-tree keyed by it, like SQLite's index-organized tables), <code>NOT NULL</code>, <code>UNIQUE</code>, and <code>NULL</code> values.</li>
+  <li><strong>Real on-disk B-tree indexes</strong> — <code>CREATE INDEX</code> builds a B-tree over a column, keyed by <code>(value, primary key)</code>. Equality and range lookups use it; other queries fall back to a full scan. <code>EXPLAIN</code> prints the whole query plan tree (<code>Limit → Project → Sort → Filter → IndexScan</code>).</li>
+  <li><strong>Transactions</strong> — <code>BEGIN</code> / <code>COMMIT</code> / <code>ROLLBACK</code>, plus one implicit transaction per statement. Before a page is first modified, its original bytes go to a journal file; commit deletes the journal, rollback restores it, and a journal found at startup is rolled back automatically — crash recovery.</li>
+  <li><strong>Persistence to disk</strong> — a database is a directory holding one file, <code>data.db</code>: a sequence of 4 KiB pages. Page 0 is the header, the schema lives in its own B-tree, each table is a B-tree, and rows bigger than a quarter of a page spill to overflow pages. A clock cache keeps hot pages in memory.</li>
+  <li><strong>A CLI / REPL</strong> — <code>cli.py</code>, with <code>.help</code>, <code>.tables</code>, <code>.exit</code>, script mode (<code>--file demo.sql</code>) and piped input — and a <strong>TCP server</strong> (<code>server.py</code>, length-prefixed protocol, one writer at a time) with a matching client (<code>server.py --client</code>).</li>
 </ul>
 
 <h2>Try it — example session</h2>
 <p>This is the real output of running the included demo script
-(<code>python3 cli.py demo.db --file demo.sql</code>), captured 2026-11-21:</p>
+(<code>python3 cli.py demo.db --file demo.sql</code>), captured 2026-11-22:</p>
 
-<pre><span class="dim">minidb&gt; CREATE TABLE users (id INT, name TEXT, age INT);</span>
+<pre><span class="dim">minidb&gt; CREATE TABLE users (id INT PRIMARY KEY, name TEXT NOT NULL, age INT, email TEXT UNIQUE);</span>
 Table users created.
-<span class="dim">minidb&gt; INSERT INTO users VALUES (1, 'Alice', 30);</span>
-1 row inserted into users (row id 0).
-<span class="dim">minidb&gt; INSERT INTO users VALUES (2, 'Bob', 25);</span>
+<span class="dim">minidb&gt; INSERT INTO users VALUES (1, 'Alice', 30, 'alice@example.com');</span>
 1 row inserted into users (row id 1).
-<span class="dim">minidb&gt; INSERT INTO users VALUES (3, 'Carol', 35);</span>
+<span class="dim">minidb&gt; INSERT INTO users VALUES (2, 'Bob', 25, 'bob@example.com');</span>
 1 row inserted into users (row id 2).
-<span class="dim">minidb&gt; INSERT INTO users VALUES (4, 'Dave', 28);</span>
+<span class="dim">minidb&gt; INSERT INTO users VALUES (3, 'Carol', 35, 'carol@example.com');</span>
 1 row inserted into users (row id 3).
+<span class="dim">minidb&gt; INSERT INTO users (id, name, age) VALUES (4, 'Dave', 28);</span>
+1 row inserted into users (row id 4).
 <span class="dim">minidb&gt; CREATE INDEX idx_users_age ON users (age);</span>
 Index idx_users_age created on users(age). B-tree height=1, entries=4.</pre>
 
 <pre><span class="dim">minidb&gt; SELECT * FROM users;</span>
-id | name  | age
----+-------+----
-1  | Alice | 30
-2  | Bob   | 25
-3  | Carol | 35
-4  | Dave  | 28
+id | name  | age | email
+---+-------+-----+------------------
+1  | Alice | 30  | alice@example.com
+2  | Bob   | 25  | bob@example.com
+3  | Carol | 35  | carol@example.com
+4  | Dave  | 28  | None
 4 row(s). Plan: FULL TABLE SCAN (4 row(s) examined)
 
 <span class="dim">minidb&gt; SELECT name, age FROM users WHERE age &gt; 28;</span>
@@ -74,38 +82,77 @@ Carol | 35
 (height=1) — 2 row id(s) via index, in key order
 
 <span class="dim">minidb&gt; SELECT * FROM users WHERE age = 30;</span>
-id | name  | age
----+-------+----
-1  | Alice | 30
+id | name  | age | email
+---+-------+-----+------------------
+1  | Alice | 30  | alice@example.com
 1 row(s). Plan: INDEX SCAN on users(age) using B-tree
 (height=1) — 1 row id(s) via index, no full scan
 
-<span class="dim">minidb&gt; EXPLAIN SELECT * FROM users WHERE name = 'Bob';</span>
-EXPLAIN: FULL TABLE SCAN (4 row(s) examined) — no usable index
-for this predicate (indexes on this table: ['age']).</pre>
+<span class="dim">minidb&gt; SELECT name FROM users ORDER BY age DESC LIMIT 2;</span>
+name
+-----
+Carol
+Alice
+2 row(s). Plan: FULL TABLE SCAN (4 row(s) examined)
+
+<span class="dim">minidb&gt; EXPLAIN SELECT * FROM users WHERE age = 30;</span>
+EXPLAIN:
+Project(id, name, age, email)
+  IndexScan(users.age = 30) — INDEX SCAN on users(age) using B-tree (height=1)
+Uses index on users(age); no full table scan.</pre>
+
+<pre><span class="dim">minidb&gt; BEGIN;</span>
+Transaction started.
+<span class="dim">minidb&gt; UPDATE users SET age = 31 WHERE id = 1;</span>
+1 row(s) updated in users.
+<span class="dim">minidb&gt; ROLLBACK;</span>
+Transaction rolled back.
+<span class="dim">minidb&gt; SELECT * FROM users WHERE id = 1;</span>
+id | name  | age | email
+---+-------+-----+------------------
+1  | Alice | 30  | alice@example.com
+1 row(s). Plan: INDEX SCAN on users(id) using B-tree
+(height=1) — 1 row id(s) via index, no full scan</pre>
 
 <p><strong>Persistence check:</strong> in a brand-new process afterwards,
 <code>SELECT * FROM users;</code> still returned all 4 rows, and
-<code>WHERE age = 30</code> still used the rebuilt index
-(<code>INDEX SCAN … 1 row id(s) via index</code>). The data lives in
-<code>demo.db/meta.json</code> and <code>demo.db/users.json</code> on disk.</p>
+<code>WHERE age = 30</code> still used the index stored on disk
+(<code>INDEX SCAN … 1 row id(s) via index</code>). The whole database is
+one file, <code>demo.db/data.db</code> — 5 pages of 4 KiB.</p>
 
-<h2>How the B-tree index works</h2>
+<h2>How storage works</h2>
 <div class="box">
-<p>Each indexed column gets its own B-tree. Keys are the column values (sorted
-inside every node); each key maps to a <em>bucket</em> of row ids, so duplicate
-values (e.g. two users aged 30) share one key. Every leaf is at the same depth,
-so the tree stays balanced and search / insert cost <code>O(log n)</code>.</p>
-<p>With minimum degree <code>t = 3</code>, a node holds at most 5 keys and 6 children.
-The height bound is <code>log<sub>t</sub>((n+1)/2) + 1</code> — for 200 rows that is
-about 5, and the test suite verifies a 200-row tree has height 5 and that every
-key is still findable. Sequential inserts leave nodes at minimum occupancy
-(2 keys), so the height is at the bound rather than below it; a larger
-<code>t</code> would be the next tuning step for disk-sized pages.</p>
-<p>When a node fills up it <em>splits</em>: the median key moves up to the parent,
-the node becomes two half-full nodes, and if the root splits the tree grows one
-level taller. That is the whole trick — splits, not rebalancing passes, keep
-the tree balanced.</p>
+<p><strong>One file, fixed-size pages.</strong> <code>data.db</code> is a sequence of
+4 KiB pages; page number × 4096 is the file offset. Page 0 is the header
+(magic, page count, schema-tree root, free-page list). The schema itself is a
+B-tree (the <code>minidb_meta</code> catalog), and every table and index is a
+B-tree whose nodes are pages.</p>
+<p><strong>Slotted pages.</strong> A B-tree node page holds a slot directory that
+grows right from the page start and cell bytes that grow left from the page
+end. Reordering cells means shifting 4-byte slot entries, not moving the
+variable-length row bytes — and a binary search over the fixed-size slots
+finds any key.</p>
+<p><strong>Index-organized tables.</strong> The table is a B-tree sorted by primary
+key, so each cell is a full row. A secondary index stores <code>(value,
+primary key)</code>; looking a row up by email costs two B-tree searches
+(index, then table) instead of a fragile physical row address.</p>
+<p><strong>Overflow pages.</strong> A row bigger than a quarter of a page keeps its
+first chunk in the cell; the cell's last 4 bytes point at an overflow page,
+whose header points at the next one — a linked list that is reassembled on
+read.</p>
+<p><strong>Clock cache + journal.</strong> Hot pages sit in a clock (second-chance)
+cache with reference and dirty bits; the hand evicts the first frame with
+ref&nbsp;=&nbsp;0, writing it back first if dirty. Before a page is first
+modified in a transaction, its original bytes are appended to the journal
+file; commit flushes and deletes the journal, rollback copies the originals
+back — and a journal found at startup means the last transaction crashed,
+so it is rolled back automatically.</p>
+<p><strong>SQL pipeline.</strong> Text → tokenizer → parser (AST) → analyzer
+(table/column/type checks) → planner (index vs full scan) → iterator plan
+(<code>SeqScan/IndexScan → Filter → Sort → Project → Limit</code>), where
+each node yields one tuple at a time. <code>Sort</code> sorts in memory while
+the result fits, and spills sorted runs to temp files for a K-way merge
+when it does not.</p>
 </div>
 
 <h2 id="run">How to run it</h2>
@@ -113,18 +160,22 @@ the tree balanced.</p>
 variables, no network.</p>
 <pre>git clone &lt;your-repo-url&gt; database-from-scratch
 cd database-from-scratch
-python3 test_db.py            <span class="dim"># 31 automated checks</span>
+python3 test_db.py            <span class="dim"># 31 baseline checks</span>
+python3 test_advanced.py      <span class="dim"># 59 advanced checks (pager, transactions, sort, server)</span>
 python3 cli.py demo.db --file demo.sql   <span class="dim"># run the demo</span>
 python3 cli.py demo.db        <span class="dim"># interactive REPL; try:</span>
 <span class="dim">#   SELECT * FROM users WHERE age = 30;</span>
-<span class="dim">#   EXPLAIN SELECT * FROM users WHERE age = 30;</span></pre>
+<span class="dim">#   BEGIN; UPDATE users SET age = 31 WHERE id = 1; ROLLBACK;</span>
+python3 server.py demo.db 8000   <span class="dim"># TCP server (another terminal:)</span>
+python3 server.py --client 127.0.0.1 8000</pre>
 
 <h2>What it does not do (yet)</h2>
 <ul>
-  <li>No JOINs, no <code>ORDER BY</code> / <code>LIMIT</code> / <code>GROUP BY</code>, no <code>NULL</code>s, no primary-key / uniqueness enforcement.</li>
-  <li>No transactions, WAL, or crash recovery beyond atomic file replacement; no concurrency control (single process, single writer).</li>
-  <li>No persistence of the index itself — it is rebuilt on open (fast for small tables, a cost at scale).</li>
-  <li>Whole-table JSON files are rewritten on every write, so it is not suited to large tables. A page-based storage file is the natural next step.</li>
+  <li>No JOINs, no <code>GROUP BY</code> / aggregates, no subqueries. One table per <code>SELECT</code>.</li>
+  <li>No MVCC or concurrent writers — one transaction at a time, one writer lock (same as the video's toy engine; production systems use WAL + MVCC instead of a journal).</li>
+  <li>No B*-tree redistribution: nodes split at the median (classic CLRS B-tree) instead of mkdb's balance-on-demand. Deletes are tombstones, not full B-tree removal with merging — space is reclaimed only when a whole tree is dropped.</li>
+  <li>No <code>CHECK</code> / <code>DEFAULT</code> / foreign keys, no <code>ALTER TABLE</code>, no <code>DROP INDEX</code>.</li>
+  <li>Rows are JSON bytes inside cells (simple and robust), not mkdb's packed binary tuple format; keys compare after decoding rather than by raw <code>memcmp</code>.</li>
 </ul>
 
 <div class="note"><strong>Live?</strong> There is no hosted database to visit — this page
@@ -136,6 +187,8 @@ the <code>README.md</code> for the exact steps.</div>
 <footer>
   minidb · database-from-scratch · MIT License · Python standard library only ·
   Full source, tests and README in the repo root.
+  Source video: “Writing My Own Database From Scratch” by Antonio Sarosi —
+  <a href="https://www.youtube.com/watch?v=5Pc18ge9ohI">youtube.com/watch?v=5Pc18ge9ohI</a>
 </footer>
 
 </body>

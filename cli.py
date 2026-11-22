@@ -22,19 +22,24 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from minidb import Database, execute  # noqa: E402
 
 HELP = """minidb — SQL supported here:
-  CREATE TABLE users (id INT, name TEXT, age INT);
+  CREATE TABLE users (id INT PRIMARY KEY, name TEXT NOT NULL, age INT, email TEXT UNIQUE);
   CREATE INDEX idx_users_age ON users (age);   -- or: CREATE INDEX ON users (age);
   INSERT INTO users VALUES (1, 'Alice', 30);
-  INSERT INTO users (id, name, age) VALUES (2, 'Bob', 25);
+  INSERT INTO users (id, name, age) VALUES (2, 'Bob', 25), (3, 'Carol', 35);
   SELECT * FROM users;
-  SELECT name, age FROM users WHERE age > 25;
-  SELECT * FROM users WHERE name = 'Alice';
+  SELECT name, age FROM users WHERE age > 25 ORDER BY age DESC LIMIT 2;
+  SELECT * FROM users WHERE name = 'Alice' OR age IS NULL;
   UPDATE users SET age = 31 WHERE id = 1;
   DELETE FROM users WHERE id = 2;
+  BEGIN;  COMMIT;  ROLLBACK;   -- transactions (journal + crash recovery)
   SHOW TABLES;  DESCRIBE users;  EXPLAIN SELECT * FROM users WHERE age = 30;
   DROP TABLE users;
-Types: INT, TEXT, FLOAT, BOOL.  Strings use single quotes.
+Types: INT (INTEGER), TEXT (VARCHAR), FLOAT (REAL), BOOL (BOOLEAN).
+Strings use single quotes. NULL is supported; PRIMARY KEY / NOT NULL /
+UNIQUE are enforced. The database is one page file (data.db): 4 KiB
+slotted pages, B-tree tables + indexes, overflow pages, clock cache.
 REPL: .tables  .help  .exit
+TCP server: python3 server.py demo.db [port]  (client: --client)
 """
 
 

@@ -4,6 +4,11 @@ Uses a throwaway directory under /tmp; exits non-zero on any failure.
 Covers: create table, insert, select all, WHERE filter, persistence
 across restarts, index use (equality + range), B-tree correctness,
 UPDATE/DELETE, and error cases.
+
+The B-tree checks now target the on-disk B-tree (DiskBTree over the
+pager file) instead of the old in-memory B-tree: same behaviours,
+except duplicate keys REPLACE the old value — an on-disk B-tree has
+unique keys (duplicates live in composite (value, pk) index keys).
 """
 import os
 import shutil
@@ -12,7 +17,9 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from minidb import BTree, Database, _tokenize, execute  # noqa: E402
+from diskbtree import DiskBTree  # noqa: E402
+from minidb import Database, _tokenize, execute  # noqa: E402
+from pager import Pager  # noqa: E402
 
 PASS = 0
 
@@ -39,28 +46,39 @@ def test_tokenizer():
 
 
 def test_btree():
-    print("B-tree:")
-    t = BTree(t=3)
-    for k in [10, 20, 5, 6, 12, 30, 7, 17]:
-        t.insert(k, k * 100)
-    check("search hit", t.search(6) == [600])
-    check("search miss", t.search(99) == [])
-    check("in-order keys sorted",
-          [k for k, _ in t.items()] == [5, 6, 7, 10, 12, 17, 20, 30])
-    check("range search", sorted(t.range_search(">", 15)) == [1700, 2000, 3000])
-    # 200 inserts force several splits; height must stay logarithmic.
-    big = BTree(t=3)
-    for k in range(200):
-        big.insert(k, k)
-    check("200 inserts, all searchable",
-          all(big.search(k) == [k] for k in range(200)))
-    # Worst-case B-tree height bound is log_t((n+1)/2) + 1; for n=200, t=3
-    # that is ~5.2, so height 5 is within bound (sequential keys leave
-    # nodes at minimum occupancy, 2 keys / 3 children each).
-    check("200-row tree stays shallow", big.height() <= 5, f"height={big.height()}")
-    # Duplicate keys share one bucket.
-    big.insert(5, 9999)
-    check("duplicate key buckets", sorted(big.search(5)) == [5, 9999])
+    print("B-tree (on-disk, over the pager file):")
+    tmp = tempfile.mkdtemp(prefix="minidb-btree-test-")
+    try:
+        pager = Pager(os.path.join(tmp, "t.db"), cache_size=4)
+        pager.begin()
+        t = DiskBTree.create(pager)
+        for k in [10, 20, 5, 6, 12, 30, 7, 17]:
+            t.insert(k, str(k * 100).encode())
+        pager.commit()
+        check("search hit", t.search(6) == b"600")
+        check("search miss", t.search(99) is None)
+        check("in-order keys sorted",
+              [k for k, _ in t.items()] == [5, 6, 7, 10, 12, 17, 20, 30])
+        check("range search", sorted(t.range_search(">", 15)) == [b"1700", b"2000", b"3000"])
+        # 200 inserts force splits; height must stay logarithmic.
+        pager.begin()
+        big = DiskBTree.create(pager)
+        for k in range(200):
+            big.insert(k, str(k).encode())
+        pager.commit()
+        check("200 inserts, all searchable",
+              all(big.search(k) == str(k).encode() for k in range(200)))
+        # A 4 KiB page holds ~100 small cells, so 200 rows sit in a
+        # 2-level tree; the old bound (height <= 5) still holds.
+        check("200-row tree stays shallow", big.height() <= 5, f"height={big.height()}")
+        # Duplicate keys replace the old value (unique keys on disk).
+        pager.begin()
+        big.insert(5, b"9999")
+        pager.commit()
+        check("duplicate key replaces value", big.search(5) == b"9999")
+        pager.close()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_database():
@@ -122,11 +140,12 @@ def test_database():
               len(rows) == 3 and sorted(r["name"] for r in rows) == ["Alice", "Bob", "Carol"],
               str(rows))
         _, rows, msg = run(db2, "SELECT * FROM users WHERE age = 31;")
-        check("persistence: index rebuilt on open, still used",
+        check("persistence: index on disk, still used",
               "INDEX SCAN" in msg and len(rows) == 1, msg)
-        # Files really exist on disk.
+        # One page file on disk now (no more meta.json / users.json).
         files = sorted(os.listdir(os.path.join(tmp, "db")))
-        check("files on disk", "meta.json" in files and "users.json" in files, str(files))
+        check("files on disk", "data.db" in files and "meta.json" not in files,
+              str(files))
 
         # Errors are raised, not silently swallowed.
         for bad, why in [

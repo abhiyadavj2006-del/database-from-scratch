@@ -1,8 +1,10 @@
 # minidb database data — created when you run the CLI; never commit these.
-# A database is a directory (e.g. demo.db/ containing meta.json + users.json).
+# A database is a directory (e.g. demo.db/ containing data.db).
 *.db
 *.db/
 demo.db/
+*-journal
+.minidb-sort-*
 *.db.tmp
 test-*.db/
 minidb-test-*/
