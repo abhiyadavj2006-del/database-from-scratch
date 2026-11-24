@@ -36,6 +36,14 @@ transactions, and a TCP server.</p>
 code does — the database itself runs on your own machine from the terminal.
 See <a href="#run">How to run it</a> below.</p>
 
+<div class="note"><strong>Try it live, right here:</strong> there is now a
+working in-browser version of this database — pure JavaScript, no server, no
+account — at <a href="console.html"><strong>console.html — the live SQL
+console</strong></a>. Run <code>SELECT * FROM users;</code>, try the examples,
+break a <code>UNIQUE</code> constraint on purpose, and watch the plans. Your
+data is saved in your browser (localStorage). The Python version below is
+still the real on-disk engine; the console is its JavaScript twin.</div>
+
 <h2>What it does</h2>
 <ul>
   <li><strong>Tables</strong> — <code>CREATE TABLE users (id INT PRIMARY KEY, name TEXT NOT NULL, age INT, email TEXT UNIQUE);</code></li>

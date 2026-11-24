@@ -6,6 +6,22 @@ a clock page cache, journal transactions, a SQL pipeline
 (tokenizer → parser → analyzer → planner → iterator plans), and a TCP
 server — following the architecture of the source video.
 
+## Live web version — try it in your browser
+
+**https://abhiyadavj2006-del.github.io/database-from-scratch/demo/console.html**
+
+A pure-JavaScript twin of `minidb` that runs 100% in the browser — no server,
+no build step, no CDN, no account. It has a SQL console (query editor, results
+table, schema viewer, `.tables` / `.schema` helpers, example queries), the same
+SQL surface as the Python version (`CREATE TABLE`, `INSERT`, `SELECT` with
+`WHERE` / `ORDER BY` / `LIMIT`, `UPDATE`, `DELETE`, `DROP TABLE`,
+`PRIMARY KEY` / `NOT NULL` / `UNIQUE`, `NULL`s, `EXPLAIN`, transactions),
+and saves your data in the browser (`localStorage`). It ships as
+`demo/console.html` + `demo/minidb.js`; the classic static demo page is still
+at `demo/index.html` and links to it. The Python version remains the real
+on-disk engine (B-trees, journal, TCP server); the web console is for trying
+the SQL instantly.
+
 ## Source
 
 This project follows **“Writing My Own Database From Scratch”** by

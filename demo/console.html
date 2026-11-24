@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>minidb — live SQL console (in your browser)</title>
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.55;
+         max-width: 760px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.9rem; margin-bottom: .2rem; }
+  h2 { margin-top: 2rem; border-bottom: 1px solid #ddd; padding-bottom: .3rem; }
+  code { background: #f2f2f2; padding: .1em .35em; border-radius: 4px; font-size: .92em; }
+  pre { background: #111; color: #e8e8e8; padding: 1rem; border-radius: 8px;
+        overflow-x: auto; font-size: .88rem; line-height: 1.45; }
+  pre .dim { color: #999; }
+  .note { background: #fff8e1; border-left: 4px solid #f0b429; padding: .8rem 1rem; }
+  .box { border: 1px solid #ddd; border-radius: 8px; padding: 1rem 1.2rem; margin: 1rem 0; }
+  table { border-collapse: collapse; }
+  td, th { border: 1px solid #ccc; padding: .35rem .7rem; text-align: left; }
+  footer { color: #666; font-size: .9rem; margin-top: 2.5rem; }
+  textarea { width: 100%; box-sizing: border-box; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+             font-size: .92rem; line-height: 1.5; padding: .7rem .8rem; border: 1px solid #bbb;
+             border-radius: 8px; background: #111; color: #e8e8e8; min-height: 110px; resize: vertical; }
+  textarea:focus { outline: 2px solid #f0b429; outline-offset: 1px; }
+  button { font: inherit; cursor: pointer; border: 1px solid #bbb; background: #fff;
+           border-radius: 6px; padding: .45rem .9rem; margin: .15rem .2rem .15rem 0; }
+  button.primary { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+  button:hover { border-color: #1a1a1a; }
+  button.primary:hover { background: #333; }
+  .examples button { font-size: .88rem; padding: .3rem .6rem; background: #f2f2f2; }
+  .msg { font-weight: 600; margin: .6rem 0; }
+  .msg.err { color: #b00020; }
+  .msg.ok { color: #1a6b2e; }
+  #results { overflow-x: auto; margin: .5rem 0; }
+  #results table { min-width: 100%; }
+  #results td.null { color: #999; font-style: italic; }
+  #log { max-height: 320px; overflow-y: auto; }
+  #log .entry { border-bottom: 1px solid #eee; padding: .45rem 0; }
+  #log .entry .q { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .88rem; }
+  #log .entry .r { color: #555; font-size: .88rem; }
+  #log .entry .r.err { color: #b00020; }
+  .schema-table { cursor: pointer; }
+  .schema-table:hover { background: #fff8e1; }
+  .pill { display: inline-block; background: #f2f2f2; border-radius: 4px; padding: 0 .4em;
+          font-size: .85em; margin-right: .3em; }
+  .kbd { background: #f2f2f2; border: 1px solid #ccc; border-bottom-width: 2px;
+         border-radius: 4px; padding: 0 .35em; font-size: .85em; }
+</style>
+</head>
+<body>
+
+<h1>minidb — live SQL console</h1>
+<p>A <strong>real, working database in your browser</strong>: the same SQL as the
+Python <code>minidb</code>, re-implemented in pure JavaScript
+(<code>minidb.js</code> — no server, no build step, no CDN, no account).
+Type a query below and run it. Your data is saved in this browser
+(<code>localStorage</code>), so it survives a reload.</p>
+
+<p><a href="index.html">&larr; Back to the classic demo page</a> &middot;
+<a href="../">Repo README</a> (on GitHub) &middot;
+The Python version runs from the terminal — see the classic page for how.</p>
+
+<div class="note"><strong>First visit?</strong> The demo data from
+<code>demo.sql</code> (the <code>users</code> table, 4 rows, age index) is
+already loaded. Try <code>SELECT * FROM users;</code>, or click an example
+below. <strong>Reset demo data</strong> restores it at any time.</div>
+
+<h2>SQL console</h2>
+<textarea id="editor" spellcheck="false">SELECT * FROM users;</textarea>
+<div>
+  <button class="primary" id="runBtn">Run (Ctrl+Enter)</button>
+  <button id="demoBtn">Load demo.sql</button>
+  <button id="resetBtn">Reset demo data</button>
+  <button id="clearBtn">Clear output</button>
+  <button id="exportBtn">Export data (JSON)</button>
+</div>
+<p class="msg" id="message" aria-live="polite"></p>
+<div id="results"></div>
+
+<h2>Try these</h2>
+<p class="examples" id="examples"></p>
+
+<h2>Schema</h2>
+<div id="schema"><p><em>No tables yet — run the demo script or create a table.</em></p></div>
+<p>
+  <button id="tablesBtn">.tables</button>
+  <button id="describeBtn">.schema users</button>
+  <button id="helpBtn">.help</button>
+</p>
+
+<h2>History</h2>
+<div id="log" class="box"><p><em>Nothing run yet.</em></p></div>
+
+<div class="box">
+<h2 style="margin-top:0;border-bottom:none;padding-bottom:0">What runs here — and what does not</h2>
+<p><strong>Works:</strong> <code>CREATE TABLE</code> / <code>DROP TABLE</code>,
+<code>CREATE INDEX</code>, <code>INSERT</code> (single + multi-row, with/without
+column list), <code>SELECT</code> with <code>WHERE</code>
+(<code>= != &lt; &gt; &lt;= &gt;=</code>, <code>AND</code>, <code>OR</code>,
+<code>IS [NOT] NULL</code>), <code>ORDER BY … ASC/DESC</code>,
+<code>LIMIT</code> / <code>OFFSET</code>, <code>UPDATE</code>,
+<code>DELETE</code>, <code>SHOW TABLES</code>, <code>DESCRIBE</code>,
+<code>EXPLAIN SELECT …</code>, <code>BEGIN</code> / <code>COMMIT</code> /
+<code>ROLLBACK</code>, <code>PRIMARY KEY</code> / <code>NOT NULL</code> /
+<code>UNIQUE</code>, <code>NULL</code> values, types <code>INT TEXT FLOAT BOOL</code>
+(+ <code>INTEGER VARCHAR REAL BOOLEAN</code> aliases). Dot-commands:
+<code>.tables</code>, <code>.schema &lt;table&gt;</code>, <code>.help</code>.</p>
+<p><strong>Not here:</strong> no JOINs, <code>GROUP BY</code>, aggregates or
+subqueries (same as the Python version); no TCP server; persistence is
+<code>localStorage</code> in this browser instead of the on-disk 4&nbsp;KiB
+page file — the Python <code>minidb</code> is the one with real B-trees,
+a journal and crash recovery. Plans still say <code>INDEX SCAN</code> /
+<code>FULL TABLE SCAN</code> exactly like the Python planner.</p>
+</div>
+
+<footer>
+  minidb · database-from-scratch · MIT License · Pure JavaScript, no dependencies ·
+  <a href="minidb.js">minidb.js</a> (the engine) · <a href="index.html">classic demo page</a>
+</footer>
+
+<script src="minidb.js"></script>
+<script>
+(function () {
+  "use strict";
+  var LS_KEY = "minidb-web-v1";
+
+  // Same content as demo.sql in the repo root (minus the trailing SHOW/DESCRIBE,
+  // which the console shows in the Schema panel instead).
+  var DEMO_SQL = [
+    "CREATE TABLE users (id INT PRIMARY KEY, name TEXT NOT NULL, age INT, email TEXT UNIQUE);",
+    "INSERT INTO users VALUES (1, 'Alice', 30, 'alice@example.com');",
+    "INSERT INTO users VALUES (2, 'Bob', 25, 'bob@example.com');",
+    "INSERT INTO users VALUES (3, 'Carol', 35, 'carol@example.com');",
+    "INSERT INTO users (id, name, age) VALUES (4, 'Dave', 28);",
+    "CREATE INDEX idx_users_age ON users (age);"
+  ].join("\n");
+
+  var EXAMPLES = [
+    "SELECT * FROM users;",
+    "SELECT name, age FROM users WHERE age > 28;",
+    "SELECT * FROM users WHERE age = 30;",
+    "SELECT name FROM users ORDER BY age DESC LIMIT 2;",
+    "SELECT * FROM users WHERE email IS NULL;",
+    "SELECT * FROM users WHERE name = 'Bob' OR age >= 35;",
+    "EXPLAIN SELECT * FROM users WHERE age = 30;",
+    "UPDATE users SET age = 31 WHERE id = 1;",
+    "INSERT INTO users VALUES (5, 'Eve', 22, 'eve@example.com');",
+    "INSERT INTO users VALUES (1, 'Mallory', 40, 'mallory@example.com');",
+    "DELETE FROM users WHERE id = 5;",
+    "SHOW TABLES;",
+    "DESCRIBE users;"
+  ];
+
+  var db = load() || seed();
+
+  var editor = document.getElementById("editor");
+  var messageEl = document.getElementById("message");
+  var resultsEl = document.getElementById("results");
+  var logEl = document.getElementById("log");
+  var schemaEl = document.getElementById("schema");
+
+  function load() {
+    try {
+      var raw = localStorage.getItem(LS_KEY);
+      if (!raw) return null;
+      var data = JSON.parse(raw);
+      if (!data || !data.tables) return null;
+      return MiniDB.Database.fromJSON(data);
+    } catch (e) { return null; }
+  }
+
+  function save() {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(db.toJSON())); } catch (e) { /* storage full/blocked: console still works in-memory */ }
+  }
+
+  function seed() {
+    var fresh = new MiniDB.Database();
+    fresh.executeScript(DEMO_SQL);
+    db = fresh;
+    save();
+    return fresh;
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function renderSchema() {
+    var tables = db.listTables();
+    if (!tables.length) {
+      schemaEl.innerHTML = "<p><em>No tables yet — run the demo script or create a table.</em></p>";
+      return;
+    }
+    var html = "<table><tr><th>table</th><th>columns</th><th>indexes</th><th>rows</th></tr>";
+    tables.forEach(function (meta) {
+      var cols = meta.columns.map(function (c) {
+        return esc(c.name + " " + c.type) +
+          (c.pk ? " <span class='pill'>PK</span>" : "") +
+          (c.notNull ? " <span class='pill'>NOT NULL</span>" : "") +
+          (c.unique ? " <span class='pill'>UNIQUE</span>" : "");
+      }).join("<br>");
+      var idx = Object.keys(meta.indexes).sort().join(", ") || "(none)";
+      html += "<tr class='schema-table' data-table='" + esc(meta.name) + "' title='Click to SELECT * from this table'>" +
+        "<td><code>" + esc(meta.name) + "</code></td><td>" + cols + "</td><td>" + esc(idx) + "</td><td>" + meta.rows.length + "</td></tr>";
+    });
+    html += "</table><p>Click a table to run <code>SELECT * FROM &lt;table&gt;;</code></p>";
+    schemaEl.innerHTML = html;
+    Array.prototype.forEach.call(schemaEl.querySelectorAll(".schema-table"), function (row) {
+      row.addEventListener("click", function () {
+        editor.value = "SELECT * FROM " + row.getAttribute("data-table") + ";";
+        run();
+      });
+    });
+  }
+
+  function renderRows(rows) {
+    if (!rows || !rows.length) { resultsEl.innerHTML = "<p><em>(0 rows)</em></p>"; return; }
+    var cols = Object.keys(rows[0]);
+    var html = "<table><tr>" + cols.map(function (c) { return "<th>" + esc(c) + "</th>"; }).join("") + "</tr>";
+    rows.forEach(function (r) {
+      html += "<tr>" + cols.map(function (c) {
+        var v = r[c];
+        if (v === null || v === undefined) return "<td class='null'>NULL</td>";
+        return "<td>" + esc(v) + "</td>";
+      }).join("") + "</tr>";
+    });
+    resultsEl.innerHTML = html + "</table>";
+  }
+
+  function setMessage(text, isErr) {
+    messageEl.textContent = text;
+    messageEl.className = "msg " + (isErr ? "err" : "ok");
+  }
+
+  function logEntry(sql, text, isErr) {
+    if (logEl.querySelector("p em")) logEl.innerHTML = "";
+    var div = document.createElement("div");
+    div.className = "entry";
+    var q = document.createElement("div");
+    q.className = "q";
+    q.textContent = "minidb> " + sql;
+    var r = document.createElement("div");
+    r.className = "r" + (isErr ? " err" : "");
+    r.textContent = text;
+    div.appendChild(q);
+    div.appendChild(r);
+    logEl.insertBefore(div, logEl.firstChild);
+    while (logEl.children.length > 50) logEl.removeChild(logEl.lastChild);
+  }
+
+  function run() {
+    var text = editor.value.trim();
+    if (!text) { setMessage("Nothing to run — type a query first.", true); return; }
+    var stmts = MiniDB.splitStatements(text);
+    var lastRows = null, lastMsg = "", sawErr = false;
+    for (var i = 0; i < stmts.length; i++) {
+      var sql = stmts[i];
+      try {
+        var res = db.execute(sql);
+        save();
+        if (res.kind === "rows") lastRows = res.rows;
+        lastMsg = res.message || lastMsg;
+        logEntry(sql, res.message || "(no message)");
+      } catch (err) {
+        save();
+        sawErr = true;
+        lastMsg = "Error: " + err.message;
+        logEntry(sql, lastMsg, true);
+        break; // stop at the first error, like the Python REPL
+      }
+    }
+    if (sawErr) {
+      setMessage(lastMsg, true);
+      renderRows(lastRows);
+    } else {
+      setMessage(lastMsg || "Done.", false);
+      renderRows(lastRows);
+    }
+    renderSchema();
+  }
+
+  function runOne(sql) {
+    editor.value = sql;
+    run();
+    editor.focus();
+  }
+
+  // Examples
+  var exEl = document.getElementById("examples");
+  EXAMPLES.forEach(function (sql) {
+    var b = document.createElement("button");
+    b.type = "button";
+    b.textContent = sql;
+    b.addEventListener("click", function () { runOne(sql); });
+    exEl.appendChild(b);
+  });
+
+  document.getElementById("runBtn").addEventListener("click", run);
+  document.getElementById("demoBtn").addEventListener("click", function () { runOne(DEMO_SQL); });
+  document.getElementById("resetBtn").addEventListener("click", function () {
+    seed();
+    renderSchema();
+    resultsEl.innerHTML = "";
+    setMessage("Demo data reset: users table recreated with 4 rows.", false);
+    logEntry("-- reset demo data", "users table recreated with 4 rows.");
+    editor.value = "SELECT * FROM users;";
+  });
+  document.getElementById("clearBtn").addEventListener("click", function () {
+    resultsEl.innerHTML = "";
+    logEl.innerHTML = "<p><em>Nothing run yet.</em></p>";
+    setMessage("", false);
+    messageEl.className = "msg";
+  });
+  document.getElementById("exportBtn").addEventListener("click", function () {
+    var blob = new Blob([JSON.stringify(db.toJSON(), null, 2)], { type: "application/json" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "minidb-web-export.json";
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  });
+  document.getElementById("tablesBtn").addEventListener("click", function () { runOne(".tables"); });
+  document.getElementById("describeBtn").addEventListener("click", function () { runOne(".schema users"); });
+  document.getElementById("helpBtn").addEventListener("click", function () { runOne(".help"); });
+
+  editor.addEventListener("keydown", function (e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); run(); }
+  });
+
+  renderSchema();
+})();
+</script>
+</body>
+</html>
